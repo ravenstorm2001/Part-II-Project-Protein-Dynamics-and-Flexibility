@@ -1,5 +1,7 @@
 # This file is just using ProDy to extract normal modes, but switched to springcraft for simplicity
-import prody 
+from prody import GNM
+from prody import ANM
+from prody import parsePDB 
 
 def calculate_modes_gnm_cpu(protein_name, cutoff = 7.0, num_modes=20, gamma = 1):
     """

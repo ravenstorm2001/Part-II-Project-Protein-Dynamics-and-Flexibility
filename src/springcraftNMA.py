@@ -1,10 +1,11 @@
 # This file is used to calculate/extract and plot normal modes from a file or from PDBID
-
 import biotite.structure as struc
 import biotite.structure.io.mmtf as mmtf
 import biotite.database.rcsb as rcsb
 import biotite.structure.io as strucio
 import springcraft
+import scipy
+import torch
 
 def calculate_normal_modes_gnm_from_file(path, cutoff):
     '''
@@ -103,3 +104,23 @@ def calculate_normal_modes_anm_from_id(id, cutoff):
 
     # Return model with all pre-processing
     return anm    
+
+def pseudo_fluctuation_measure(eval, evec, K = 10, funct = (lambda x: 1/x)):
+    '''
+    Function that calculates pseudo fluctuation measure calculated as sum of eigenvectors scaled by softmaxed eigenvalues.
+
+    Arguments:
+        eval : numpy.array(float) - eigenvalues of the structure
+        evec : numpy.array(numpy.array(float)) - eigenvectors of the structure
+        K : int - number of modes to be considered
+        funct : lambda - function directing which property to pass to softmax 
+    Returns:
+        pseudo_fluc : torch.Tensor - pseudo fluctuation value from eigenvalues and eigenvectors 
+    '''
+    eval = eval[1:K]
+    w = scipy.special.softmax(funct(eval))
+    evec = evec[1:K]
+    evec = evec**2
+    evec = evec.transpose()
+    pseudo_fluc = (w*evec).sum(axis=1)
+    return torch.from_numpy(pseudo_fluc)
