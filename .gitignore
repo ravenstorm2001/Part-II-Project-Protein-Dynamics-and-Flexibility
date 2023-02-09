@@ -2,4 +2,4 @@
 data/
 *.pdb
 *.pdb.gz
-*__pychache__
+**/__pycache__/
