@@ -23,7 +23,6 @@ def check_chain(chain: biotite.structure.AtomArray):
     return False
 
 def load_structures_from_file_ids(path, labels, database, exclude: Optional[str] = None):
-    pbar = ProgressBar()
     if exclude != None:
         structure_set = set(line.strip() for line in open(path)).difference(set(line.strip().replace("_",".") for line in open(exclude)))
     else:
@@ -40,8 +39,6 @@ def load_structures_from_file_ids(path, labels, database, exclude: Optional[str]
     return structures
 
 def load_structures_from_labels_available(labels, database, exclude):
-    pbar = ProgressBar()
-
     all_structures = []
     for id in pbar(set(labels.chain_id).difference(set(line.strip().replace("_",".") for line in open('./data/enzyme_data/missing_resis.txt')))):
         PDBid, chain = id.split(".")
