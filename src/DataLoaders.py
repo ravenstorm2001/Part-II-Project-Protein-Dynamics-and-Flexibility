@@ -3,7 +3,7 @@ import numpy as np
 import biotite
 import biotite.structure as struc
 import src.DataProcessing  as dp
-from progressbar import ProgressBar
+from tqdm import tqdm
 from typing import Optional
 
 def load_labels(path):
@@ -28,7 +28,7 @@ def load_structures_from_file_ids(path, labels, database, exclude: Optional[str]
     else:
         structure_set = set(line.strip() for line in open(path))
     structures = []
-    for id in pbar(structure_set):
+    for id in tqdm(structure_set):
         PDBid, chain = id.split(".")
         x = dp.DataPreProcessorForGNM(type_flexibility = "msqf")
         if(database.__contains__(PDBid)):
@@ -40,7 +40,7 @@ def load_structures_from_file_ids(path, labels, database, exclude: Optional[str]
 
 def load_structures_from_labels_available(labels, database, exclude):
     all_structures = []
-    for id in pbar(set(labels.chain_id).difference(set(line.strip().replace("_",".") for line in open('./data/enzyme_data/missing_resis.txt')))):
+    for id in tqdm(set(labels.chain_id).difference(set(line.strip().replace("_",".") for line in open('./data/enzyme_data/missing_resis.txt')))):
         PDBid, chain = id.split(".")
         x = dp.DataPreProcessorForGNM(type_flexibility = "msqf")
         if(database.__contains__(PDBid)):
