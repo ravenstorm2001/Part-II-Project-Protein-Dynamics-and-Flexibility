@@ -2,3 +2,4 @@
 data/
 *.pdb
 *.pdb.gz
+__pychache__
