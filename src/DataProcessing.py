@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 import math
 
 import numpy as np
@@ -47,8 +47,8 @@ class DataPreProcessor():
         Read a protein from a file and return a graph representation.
 
         Args:
-            file_path (str): Path to the file to read.
-            **kwargs: Additional arguments to pass to `__call__`.
+            file_path: str - Path to the file to read.
+            **kwargs - Additional arguments to pass to `__call__`.
 
         Returns:
             torch_geometric.data.Data: Graph representation of the protein.
@@ -56,10 +56,22 @@ class DataPreProcessor():
 
         whole_structure = strucio.load_structure(file_path)
         protein = whole_structure[struc.filter_amino_acids(whole_structure)]
+        # TODO: change from file if necessary to add labels
         label = 0
         return self(protein, label, **kwargs)
 
     def from_loaded_structure(self, structure: struc.AtomArray, label: int, **kwargs):
+        """
+        Read a protein from a file and return a graph representation.
+
+        Args:
+            structure: struc.AtomArray - protein strucure.
+            label: int - class which protein belongs to
+            **kwargs -  Additional arguments to pass to `__call__`.
+
+        Returns:
+            torch_geometric.data.Data: Graph representation of the protein.
+        """
         return self(structure, label, **kwargs)
 
 class DataPreProcessorForANM(DataPreProcessor):
@@ -79,7 +91,7 @@ class DataPreProcessorForGNM(DataPreProcessor):
         node_alphabet: dict[str, int] = _aa_alphabet,
         edge_cutoff: float = 10.0,
         n_pos_embeddings: int = 16,
-        type_flexibility: Literal["msqf", "bfactor", "pseudo", "none"] = "none",
+        type_flexibility: Optional[Literal["msqf", "bfactor", "pseudo"]] = None,
         num_classes: int = 384,
         **kwargs,
     ):
@@ -112,7 +124,7 @@ class DataPreProcessorForGNM(DataPreProcessor):
         dihedrals = self._dihedrals(df)
         orientations = self._orientations(coords)
         sidechains = self._sidechains(df)
-        if self.type_flexibility == "none":
+        if self.type_flexibility is None:
             node_s = dihedrals
             node_v = torch.cat([orientations, sidechains.unsqueeze(-2)], dim=-2)
         else:
@@ -147,7 +159,7 @@ class DataPreProcessorForGNM(DataPreProcessor):
         
     def _get_residue_coords(self, df: pd.DataFrame) -> np.ndarray:
         return df[df["name"] == "CA"][["x", "y", "z"]].to_numpy()
-
+    # TODO: Change to One Hot Encoding for GVP after
     def _get_residue_types(self, df: pd.DataFrame) -> np.ndarray:
         return df[df["name"] == "CA"]["resname"].map(self.node_alphabet).to_numpy()
 

@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from typing import Literal
 
 def calculate_normal_modes_gnm_from_file(path, cutoff):
-    '''
+    """
     Function that calculates eigenvalues and eigenvectors of Kirchhoff matrix using GNM method from .pdb file.
 
     Arguments:
@@ -20,7 +20,7 @@ def calculate_normal_modes_gnm_from_file(path, cutoff):
         cutoff : double - Angstrom distance under which two CA atoms are represented as connected
     Returns:
         gnm : springcraft.GNM - class that contains Kirchhoff matrix and can call calculation of normal modes
-    '''
+    """
 
     # Read .pdb file and filter CA atoms
     whole_structure = strucio.load_structure(path)
@@ -35,7 +35,7 @@ def calculate_normal_modes_gnm_from_file(path, cutoff):
     return gnm
 
 def calculate_normal_modes_gnm_from_id(id, cutoff):
-    '''
+    """
     Function that calculates eigenvalues and eigenvectors of Kirchhoff matrix using GNM method from PDBID of a structure.
 
     Arguments:
@@ -43,7 +43,7 @@ def calculate_normal_modes_gnm_from_id(id, cutoff):
         cutoff : double - Angstrom distance under which two CA atoms are represented as connected
     Returns:
         gnm : springcraft.GNM - class that contains Kirchhoff matrix and can call calculation of normal modes
-    '''
+    """
 
     # Read .pdb file and filter CA atoms
     mmtf_file = mmtf.MMTFFile.read(rcsb.fetch(id, "mmtf"))
@@ -59,7 +59,7 @@ def calculate_normal_modes_gnm_from_id(id, cutoff):
     return gnm    
 
 def calculate_normal_modes_anm_from_file(path, cutoff):
-    '''
+    """
     Function that calculates eigenvalues and eigenvectors of Kirchhoff matrix using ANM method from .pdb file.
 
     Arguments:
@@ -67,7 +67,7 @@ def calculate_normal_modes_anm_from_file(path, cutoff):
         cutoff : double - Angstrom distance under which two CA atoms are represented as connected
     Returns:
         anm : springcraft.GNM - class that contains Kirchhoff matrix and can call calculation of normal modes
-    '''
+    """
 
     # Read .pdb file and filter CA atoms
     whole_structure = strucio.load_structure(path)
@@ -82,7 +82,7 @@ def calculate_normal_modes_anm_from_file(path, cutoff):
     return anm
 
 def calculate_normal_modes_anm_from_id(id, cutoff):
-    '''
+    """
     Function that calculates eigenvalues and eigenvectors of Kirchhoff matrix using ANM method from PDBID of a structure.
 
     Arguments:
@@ -90,7 +90,7 @@ def calculate_normal_modes_anm_from_id(id, cutoff):
         cutoff : double - Angstrom distance under which two CA atoms are represented as connected
     Returns:
         anm : springcraft.GNM - class that contains Kirchhoff matrix and can call calculation of normal modes
-    '''
+    """
 
     # Read .pdb file and filter CA atoms
     mmtf_file = mmtf.MMTFFile.read(rcsb.fetch(id, "mmtf"))
@@ -106,7 +106,7 @@ def calculate_normal_modes_anm_from_id(id, cutoff):
     return anm    
 
 def pseudo_fluctuation_measure(eval, evec, K = 10, funct = (lambda x: 1/x)):
-    '''
+    """
     Function that calculates pseudo fluctuation measure calculated as sum of eigenvectors scaled by softmaxed eigenvalues.
 
     Arguments:
@@ -116,7 +116,7 @@ def pseudo_fluctuation_measure(eval, evec, K = 10, funct = (lambda x: 1/x)):
         funct : lambda - function directing which property to pass to softmax 
     Returns:
         pseudo_fluc : torch.Tensor - pseudo fluctuation value from eigenvalues and eigenvectors 
-    '''
+    """
     eval = eval[1:K]
     w = scipy.special.softmax(funct(eval))
     evec = evec[1:K]
@@ -126,7 +126,7 @@ def pseudo_fluctuation_measure(eval, evec, K = 10, funct = (lambda x: 1/x)):
     return torch.from_numpy(pseudo_fluc)
 
 def plot_flexibility_value(id, cutoff, k = 10, flex: Literal["msqf", "bfact", "pseudo"] = "msqf"):
-    '''
+    """
     Function that plots flexibility value against all residues.
 
     Arguments:
@@ -134,7 +134,7 @@ def plot_flexibility_value(id, cutoff, k = 10, flex: Literal["msqf", "bfact", "p
         cutoff : double - cutoff distance for NMA analysis
         k : int - number of modes to be considered
         flex : Literal - type of flexibility value to plot  
-    '''
+    """
     gnm = calculate_normal_modes_gnm_from_id(id, cutoff)
     if flex == "msqf":
         msqf = gnm.mean_square_fluctuation(mode_subset = np.array([i for i in range(1, k)]))
@@ -176,13 +176,13 @@ def plot_flexibility_value(id, cutoff, k = 10, flex: Literal["msqf", "bfact", "p
         raise ValueError("Not appropriate flex type.")
     
 def plot_eigval_freq(id, cutoff):
-    '''
+    """
     Function that plots eigenvalues and frequencies agains all normal modes.
 
     Arguments:
         id : string - PDB ID of the structure
         cutoff : double - cutoff distance for NMA analysis
-    '''
+    """
     gnm = calculate_normal_modes_gnm_from_id(id, cutoff)
     eigenval, eigenvec = gnm.eigen() 
 
