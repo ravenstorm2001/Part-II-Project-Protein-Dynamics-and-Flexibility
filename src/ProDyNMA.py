@@ -1,4 +1,5 @@
 # This file is just using ProDy to extract normal modes, but switched to springcraft for simplicity
+
 from prody import GNM
 from prody import ANM
 from prody import parsePDB 

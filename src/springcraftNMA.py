@@ -1,4 +1,5 @@
 # This file is used to calculate/extract and plot normal modes from a file or from PDBID
+
 import biotite
 import biotite.structure as struc
 import biotite.structure.io.mmtf as mmtf
