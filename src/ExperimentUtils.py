@@ -6,7 +6,7 @@ import numpy as np
 
 from torcheval.metrics.functional import multiclass_accuracy
 
-def train(model, train_loader, optimizer, device):
+def train(model, train_loader, optimizer, device, num_classes):
     """
     Function for training the model.
 
@@ -25,7 +25,7 @@ def train(model, train_loader, optimizer, device):
         data = data.to(device)
         optimizer.zero_grad()
         y_pred = model(data)
-        loss = F.cross_entropy(y_pred, data.y)
+        loss = F.cross_entropy(y_pred, torch.reshape(data.y, (-1 ,num_classes)))
         loss.backward()
         loss_all += loss.item()
         optimizer.step()
@@ -49,9 +49,9 @@ def eval_accuracy(model, loader, device, num_classes):
     for data in loader:
         data = data.to(device)
         with torch.no_grad():
-            y_pred = model(data)
+            y_pred = model(data)  # [batch_size * num_classes]
             # Accuracy on a batch
-            error += multiclass_accuracy(torch.reshape(y_pred, (-1 ,num_classes)), torch.argmax(torch.reshape(data.y, (-1 ,num_classes)), dim = 1))
+            error += multiclass_accuracy(y_pred, torch.argmax(torch.reshape(data.y, (-1 ,num_classes)), dim = 1))
     return error / len(loader)
 
 def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_epochs=100):
@@ -85,8 +85,8 @@ def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_e
     
     model = model.to(device)
 
-    # Adam optimizer with LR 1e-3
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    # Adam optimizer with LR 1e-4
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
 
     # LR scheduler which decays LR when validation metric doesn't improve
     # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -101,7 +101,7 @@ def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_e
         #lr = scheduler.optimizer.param_groups[0]['lr']
 
         # Train model for one epoch, return avg. training loss
-        loss = train(model, train_loader, optimizer, device)
+        loss = train(model, train_loader, optimizer, device, 384)
         
         # Evaluate model on validation set
         val_accuracy = eval_accuracy(model, val_loader, device, 384)

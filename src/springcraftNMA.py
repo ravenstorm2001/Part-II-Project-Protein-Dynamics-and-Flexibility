@@ -118,9 +118,9 @@ def pseudo_fluctuation_measure(eval, evec, K = 10, funct = (lambda x: 1/x)):
     Returns:
         pseudo_fluc : torch.Tensor - pseudo fluctuation value from eigenvalues and eigenvectors 
     """
-    eval = eval[1:K]
+    eval = eval[1:K+1]
     w = scipy.special.softmax(funct(eval))
-    evec = evec[1:K]
+    evec = evec[1:K+1]
     evec = evec**2
     evec = evec.transpose()
     pseudo_fluc = (w*evec).sum(axis=1)
@@ -138,7 +138,7 @@ def plot_flexibility_value(id, cutoff, k = 10, flex: Literal["msqf", "bfact", "p
     """
     gnm = calculate_normal_modes_gnm_from_id(id, cutoff)
     if flex == "msqf":
-        msqf = gnm.mean_square_fluctuation(mode_subset = np.array([i for i in range(1, k)]))
+        msqf = gnm.mean_square_fluctuation(mode_subset = np.array([i for i in range(1, k+1)]))
         fig = plt.figure(figsize=(8.0, 4.0), constrained_layout=True)
         grid = fig.add_gridspec(nrows=1, ncols=2)
         ax = fig.add_subplot(grid[0, :])
@@ -151,7 +151,7 @@ def plot_flexibility_value(id, cutoff, k = 10, flex: Literal["msqf", "bfact", "p
 
         plt.show()
     elif flex == "bfact":
-        bfact = gnm.bfactor(mode_subset = np.array([i for i in range(1, k)]))
+        bfact = gnm.bfactor(mode_subset = np.array([i for i in range(1, k+1)]))
         fig = plt.figure(figsize=(8.0, 4.0), constrained_layout=True)
         grid = fig.add_gridspec(nrows=1, ncols=2)
         ax = fig.add_subplot(grid[0, :])

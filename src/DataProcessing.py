@@ -2,6 +2,7 @@
 
 from typing import Literal, Optional
 import math
+from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ import torch.nn.functional as F
 import torch_cluster
 import torch_geometric
 
+import biotite
 import biotite.structure as struc
 import biotite.structure.io as strucio
 import springcraft
@@ -113,8 +115,12 @@ class DataPreProcessorForGNM(DataPreProcessor):
         
         # Get nodes
         coords = torch.as_tensor(self._get_residue_coords(df), device=self.device, dtype=self.dtype)
+        residue_type = self._get_residue_types(df)
+        help = np.zeros((len(residue_type),len(STANDARD_AMINO_ACIDS)))
+        for i in range(len(residue_type)):
+            help[i][residue_type[i]] = 1
         node_types = torch.as_tensor(
-            self._get_residue_types(df), dtype=torch.long, device=self.device
+            help, dtype=torch.long, device=self.device
         )
         mask = torch.isfinite(coords.sum(axis=1))
         coords[~mask] = np.inf
@@ -272,3 +278,52 @@ def _rbf(
 
     RBF = torch.exp(-(((D_expand - D_mu) / D_sigma) ** 2))
     return RBF
+
+def check_chain(chain: biotite.structure.AtomArray):
+    """
+    Filtering function. Checks whether we have same number of N,CA,C,O atoms and whether they are present for the same subset of residues.
+
+    Arguments:
+        chain: biotite.structure.AtomArray - protein chain to check
+    Return:
+        result: bool - whether the atom is acceptible
+    """
+    ns = chain[chain.atom_name == 'N']
+    cas = chain[chain.atom_name == 'CA']
+    cs = chain[chain.atom_name == 'C']
+    os = chain[chain.atom_name == 'O']
+    if ((not all(np.isfinite(ns.coord.sum(axis=1)))) or (not all(np.isfinite(cas.coord.sum(axis=1)))) or (not all(np.isfinite(cs.coord.sum(axis=1)))) or (not all(np.isfinite(os.coord.sum(axis=1))))):
+        return False
+    if not (set(chain.res_name).issubset(set(STANDARD_AMINO_ACIDS))):
+        return False
+    if(np.array_equal(ns.res_id, cas.res_id) and np.array_equal(cas.res_id, cs.res_id) and np.array_equal(cs.res_id, os.res_id)):
+        return True
+    return False
+
+def calculate_all_structures_and_store(labels, database, store_to, flex: Optional[Literal["msqf", "bfact", "pseudo"]] = "msqf", exclude: Optional[str] = None):
+    if exclude is not None:
+        for id in tqdm(set(labels.chain_id).difference(set(line.strip().replace("_",".") for line in open(exclude)))):
+            PDBid, chain = id.split(".")
+            if(PDBid in database):
+                structure = database[PDBid]["structure"]
+                x = DataPreProcessorForGNM(type_flexibility = flex)
+                protein_chain = structure[(structure.chain_id == chain) & struc.filter_amino_acids(structure)] 
+                if(check_chain(protein_chain)):
+                    if flex is not None:
+                        torch.save(x.from_loaded_structure(protein_chain, labels[labels["chain_id"] == id]["label"].iloc[0]), store_to + "/" + flex + "/" + str(labels[labels["chain_id"] == id]["label"].iloc[0]) + "/" + id.replace(".","_") + ".pt")
+                    else:
+                        torch.save(x.from_loaded_structure(protein_chain, labels[labels["chain_id"] == id]["label"].iloc[0]), store_to + "/no_flex/" + str(labels[labels["chain_id"] == id]["label"].iloc[0]) + "/" + id.replace(".","_") + ".pt")
+    else:
+        for id in tqdm(set(labels.chain_id)):
+            PDBid, chain = id.split(".")
+            if(PDBid in database):
+                structure = database[PDBid]["structure"]
+                x = DataPreProcessorForGNM(type_flexibility = flex)
+                protein_chain = structure[(structure.chain_id == chain) & struc.filter_amino_acids(structure)] 
+                if(check_chain(protein_chain)):
+                    if flex is not None:
+                        torch.save(x.from_loaded_structure(protein_chain, labels[labels["chain_id"] == id]["label"].iloc[0]), store_to + "/" + flex + "/" + str(labels[labels["chain_id"] == id]["label"].iloc[0]) + "/" + id.replace(".","_") + ".pt")
+                    else:
+                        torch.save(x.from_loaded_structure(protein_chain, labels[labels["chain_id"] == id]["label"].iloc[0]), store_to + "/no_flex/" + str(labels[labels["chain_id"] == id]["label"].iloc[0]) + "/" + id.replace(".","_") + ".pt")
+    
+    return

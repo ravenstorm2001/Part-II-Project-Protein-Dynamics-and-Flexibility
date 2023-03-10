@@ -1,6 +1,8 @@
 # Classes for wrapping data into datasets
 
 import pandas as pd
+import os
+import torch
 import numpy as np
 import biotite
 import biotite.structure as struc
@@ -13,35 +15,25 @@ class ProteinDataset(Dataset):
     """
     Dataset for loading proteins from the paper given splits.
     """
-    def __init__(self, labels, database, include, flex: Literal["msqf", "bfact", "pseudo"] = "msqf", exclude: Optional[str] = None):
+    def __init__(self, labels, include, flex: Optional[Literal["msqf", "bfact", "pseudo"]] = "msqf", exclude: Optional[str] = None):
         self.flex = flex
-        self.database = database
-        self.structures = []
         self.protein_labels = pd.DataFrame(columns = ['chain_id', 'label'])
         if exclude != None:
             structure_set = set(line.strip() for line in open(include)).difference(set(line.strip().replace("_",".") for line in open(exclude)))
         else:
             structure_set = set(line.strip() for line in open(include))
         for id in tqdm(structure_set):
-            PDBid, chain = id.split(".")
-            if(PDBid in database):
-                structure = database[PDBid]["structure"]
-                protein_chain = structure[(structure.chain_id == chain) & struc.filter_amino_acids(structure)] 
-                if(check_chain(protein_chain)):
-                    self.protein_labels = pd.concat([self.protein_labels,  labels[labels["chain_id"] == id]])
+            if os.path.isfile("./data/preprocessed_data/" + flex + "/" + str(labels[labels["chain_id"] == id]["label"].iloc[0]) + "/" + str(id).replace(".","_") + ".pt"):
+                self.protein_labels = pd.concat([self.protein_labels,  labels[labels["chain_id"] == id]])
         
     def __len__(self):
         return len(self.protein_labels)
 
     def __getitem__(self, idx):
-        labeled = self.protein_labels.iloc[idx]
-        PDBid, chain = labeled.iloc[0]["chain_id"].split(".")
-        x = dp.DataPreProcessorForGNM(type_flexibility = self.flex)
-        structure = self.database[PDBid]["structure"]
-        protein_chain = structure[(structure.chain_id == chain) & struc.filter_amino_acids(structure)] 
-        struct = [x.from_loaded_structure(protein_chain, m) for m in labeled["label"]]
-        return struct
+        label = self.protein_labels.iloc[idx]
+        return torch.load("./data/preprocessed_data/" + self.flex + "/" + str(label["label"]) + "/" + str(label["chain_id"]).replace(".","_") + ".pt")
 
+# TODO: REWORK if necessary, or delete if not used till the end of project
 class AllProteinDataset(Dataset):
     """
     Dataset class for loading all proteins for available labels.
@@ -54,13 +46,14 @@ class AllProteinDataset(Dataset):
             if(PDBid in database):
                 structure = database[PDBid]["structure"]
                 protein_chain = structure[(structure.chain_id == chain) & struc.filter_amino_acids(structure)] 
-                if(check_chain(protein_chain)):
-                    self.protein_labels = pd.concat([self.protein_labels,labels[labels["chain_id"] == id]])
+                #if(check_chain(protein_chain)):
+                #    self.protein_labels = pd.concat([self.protein_labels,labels[labels["chain_id"] == id]])
     
     def __len__(self):
         return len(self.protein_labels)
 
     def __getitem__(self, idx):
+        # TODO: fixERROR if used (iloc only gets one value)
         labeled = self.protein_labels.iloc[idx]
         PDBid, chain = labeled.iloc[0]["chain_id"].split(".")
         x = dp.DataPreProcessorForGNM(type_flexibility = self.flex)
@@ -81,22 +74,3 @@ def load_labels(path:str):
     """
     labels = pd.read_csv(path, names = ["chain_id", "label"])
     return labels
-
-def check_chain(chain: biotite.structure.AtomArray):
-    """
-    Filtering function. Checks whether we have same number of N,CA,C,O atoms and whether they are present for the same subset of residues.
-
-    Arguments:
-        chain: biotite.structure.AtomArray - protein chain to check
-    Return:
-        result: bool - whether the atom is acceptible
-    """
-    ns = chain[chain.atom_name == 'N']
-    cas = chain[chain.atom_name == 'CA']
-    cs = chain[chain.atom_name == 'C']
-    os = chain[chain.atom_name == 'O']
-    if not (set(chain.res_name).issubset(set(dp.STANDARD_AMINO_ACIDS))):
-        return False
-    if(np.array_equal(ns.res_id, cas.res_id) and np.array_equal(cas.res_id, cs.res_id) and np.array_equal(cs.res_id, os.res_id)):
-        return True
-    return False

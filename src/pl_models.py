@@ -1,5 +1,7 @@
 # File for Layer and Model implementations
 import torch
+import pytorch_lightning as pl
+import torch.nn.functional as F
 
 from torch.nn import Linear, ReLU, BatchNorm1d, Module, Sequential, SiLU
 from torch_geometric.nn import MessagePassing, global_mean_pool
@@ -199,8 +201,8 @@ class EGNNSiLULayer(MessagePassing):
     def __repr__(self) -> str:
         return (f'{self.__class__.__name__}(emb_dim={self.emb_dim}, aggr={self.aggr})')
 
-class EGNNReLUModel(Module):
-    def __init__(self, num_layers=4, emb_dim=64, in_dim=8, edge_dim=32, out_dim=1):
+class PlEGNNReLUModel(pl.LightningModule):
+    def __init__(self, num_layers=4, emb_dim=64, in_dim=8, edge_dim=32, out_dim=1, num_classes=384):
         """Message Passing Neural Network model for graph classification
 
         This model uses both node features and coordinates as inputs, and
@@ -212,6 +214,7 @@ class EGNNReLUModel(Module):
             in_dim: (int) - initial node feature dimension `d_n`
             edge_dim: (int) - edge feature dimension `d_e`
             out_dim: (int) - output dimension (fixed to 1)
+            num_classes: (int) - number of classes in data
         """
         super().__init__()
         
@@ -231,6 +234,8 @@ class EGNNReLUModel(Module):
         # Linear prediction head
         # dim: d -> out_dim
         self.lin_pred = Linear(emb_dim, out_dim)
+
+        self.num_classes = num_classes
         
     def forward(self, data):
         """
@@ -253,6 +258,14 @@ class EGNNReLUModel(Module):
         logits = self.lin_pred(h_graph) # (batch_size, d) -> (batch_size, 384)
 
         return logits
+    
+    def training_step(self, batch, batch_idx):
+        y_hat = self(batch)
+        loss = F.cross_entropy(y_hat, batch.y.view(-1, self.num_classes))
+        return loss
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=0.0001)
     
 class EGNNSiLUModel(Module):
     def __init__(self, num_layers=4, emb_dim=64, in_dim=8, edge_dim=32, out_dim=1):

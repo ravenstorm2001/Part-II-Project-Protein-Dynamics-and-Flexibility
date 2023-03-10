@@ -3,3 +3,4 @@ data/
 *.pdb
 *.pdb.gz
 **/__pycache__/
+**/lightning_logs/

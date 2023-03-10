@@ -3,7 +3,8 @@ from __future__ import annotations
 import gzip
 import io
 import pathlib
-from typing import Any, Literal, Sequence
+import pickle as pkl
+from typing import Any, Callable, Iterable, Literal, Sequence, Tuple
 
 import lmdb
 import numpy as np
@@ -11,16 +12,22 @@ import pandas as pd
 from loguru import logger
 from tqdm import tqdm
 
-from libraries.serialisation import deserialise, serialise
-
+try:
+    import msgpack
+except ImportError:
+    logger.warning("msgpack not installed, cannot use msgpack serialisation")
+try:
+    import dill
+except ImportError:
+    logger.warning("dill not installed, cannot use dill serialisation")
+try:
+    import biotite.structure.io.npz as npz
+except ImportError:
+    logger.warning("biotite not installed, cannot serealise biotite serialisation")
 try:
     import torch
 except ImportError:
     logger.warning("torch not installed, cannot serealise torch objects")
-try:
-    import biotite.structure.io.npz as npz
-except ImportError:
-    logger.warning("biotite not installed, cannot serealise biotite objects")
 
 __all__ = ["LMDBDataset"]
 
@@ -31,7 +38,6 @@ LMDB_MAP_SIZE = 10_000_000_000_000  # 10 TB
 class LMDBDataset:
     """
     Creates a dataset from an lmdb file.
-    Adapted and extended from `Atom3D <https://github.com/songlab-cal/tape/blob/master/tape/datasets.py>`.
     """
 
     def __init__(self, lmdb_path: pathlib.Path | str, transform=None):
@@ -43,8 +49,9 @@ class LMDBDataset:
         self._connect()
         with self._env.begin(write=False) as txn:
             self._serialisation_format = _lmdb_get("serialisation_format", txn)
+            self._compresslevel = int(_lmdb_get("compresslevel", txn))
             self._metadata = self._cast_to_type(
-                _lmdb_get("metadata", txn, self._serialisation_format, decompress=True),
+                _lmdb_get("metadata", txn, self._serialisation_format),
                 str(pd.DataFrame),
             )
         # NOTE: We remove the `_env` variable in `init` on purpose as it messes with
@@ -87,9 +94,7 @@ class LMDBDataset:
 
     def size_on_disk(self, unit: Literal["B", "KB", "MB", "GB", "TB"] = "MB") -> float:
         units = {"B": 1, "KB": 2**10, "MB": 2**20, "GB": 2**30, "TB": 2**40}
-        self._size_in_bytes = (self.lmdb_path / "data.mdb").stat().st_size + (
-            self.lmdb_path / "lock.mdb"
-        ).stat().st_size
+        self._size_in_bytes = (self.lmdb_path / "data.mdb").stat().st_size
         return self._size_in_bytes / units[unit]
 
     def __repr__(self) -> str:
@@ -101,14 +106,23 @@ class LMDBDataset:
         )
 
     # ==================== Getter functions ====================
-    def _connect(self) -> None:
+    def _connect(
+        self,
+        readonly: bool = True,
+        max_readers: int = 1,
+        lock: bool = False,
+        readahead: bool = False,
+        meminit: bool = False,
+        **kwargs,
+    ) -> None:
         self._env = lmdb.open(
             str(self.lmdb_path),
-            max_readers=1,
-            readonly=True,
-            lock=False,
-            readahead=False,
-            meminit=False,
+            max_readers=max_readers,
+            readonly=readonly,
+            lock=lock,
+            readahead=readahead,
+            meminit=meminit,
+            **kwargs,
         )
 
     def _disconnect(self) -> None:
@@ -138,12 +152,7 @@ class LMDBDataset:
 
         with self._env.begin(write=False) as txn:
             try:
-                item = _lmdb_get(
-                    str(index_or_id),
-                    txn,
-                    self._serialisation_format,
-                    decompress=True,
-                )
+                item = _lmdb_get(str(index_or_id), txn, self._serialisation_format)
             except KeyError as e:
                 raise e
             except Exception as e:
@@ -157,15 +166,14 @@ class LMDBDataset:
             item.pop("_types")  # remove internal _types key
         else:
             logger.warning(
-                "Data types in item %i not defined. Will use basic types only."
-                % index_or_id
+                "Data types in item %i not defined. Will use basic types only." % index_or_id
             )
 
         if self._transform:
             item = self._transform(item)
         return item
 
-    def update_metadata(self, metadata: pd.DataFrame) -> "LMDBDataset":
+    def update_metadata(self, metadata: pd.DataFrame, **env_kwargs) -> "LMDBDataset":
         """
         Update metadata. Useful if you want to add new columns to the metadata or
         wanted to change the order of columns or rows. All ids must be the same.
@@ -176,15 +184,15 @@ class LMDBDataset:
         Returns:
             LMDBDataset: self
         """
-        assert set(self.ids) == set(metadata.index), "ids must be the same"
-        env = lmdb.open(str(self.lmdb_path), map_size=LMDB_MAP_SIZE)
+        # assert set(self.ids) == set(metadata.index), "ids must be the same"
+        env = lmdb.open(str(self.lmdb_path), map_size=LMDB_MAP_SIZE, lock=True, **env_kwargs)
         with env.begin(write=True) as txn:
             _lmdb_set(
                 key="metadata",
                 val=metadata,
                 txn=txn,
                 serialisation_format=self.serialisation_format,
-                compress=True,
+                compresslevel=self._compresslevel,
                 overwrite=True,
             )
             logger.info("Successfully updated metadata.")
@@ -213,7 +221,7 @@ class LMDBDataset:
         ids_to_delete = set(ids).intersection(set(self.ids))
 
         deleted_ids = set()
-        env = lmdb.open(str(self.lmdb_path), map_size=LMDB_MAP_SIZE)
+        env = lmdb.open(str(self.lmdb_path), map_size=LMDB_MAP_SIZE, lock=True)
         with env.begin(write=True) as txn:
             for id in tqdm(ids_to_delete, total=len(ids_to_delete)):
                 try:
@@ -227,7 +235,7 @@ class LMDBDataset:
                 val=new_metadata,
                 txn=txn,
                 serialisation_format=self.serialisation_format,
-                compress=True,
+                compresslevel=self._compresslevel,
                 overwrite=True,
             )
             self._metadata = new_metadata
@@ -240,6 +248,8 @@ class LMDBDataset:
         dataset: dict | Sequence[dict],
         metadata: pd.DataFrame,
         overwrite: bool = False,
+        compresslevel: int = 6,
+        **env_kwargs,
     ) -> "LMDBDataset":
         """
         Add data with corresponding metadata to the dataset.
@@ -256,7 +266,7 @@ class LMDBDataset:
         if isinstance(dataset, dict):
             dataset = [dataset]
 
-        env = lmdb.open(str(self.lmdb_path), map_size=LMDB_MAP_SIZE)
+        env = lmdb.open(str(self.lmdb_path), map_size=LMDB_MAP_SIZE, **env_kwargs)
 
         added_ids = set()
         metadata_ids = set(metadata.index)
@@ -265,9 +275,7 @@ class LMDBDataset:
             # Add all datapoints to database
             for x in tqdm(dataset, total=len(dataset)):
                 try:
-                    assert (
-                        overwrite or x["id"] not in existing_ids
-                    ), "id already exists in database"
+                    assert overwrite or x["id"] not in existing_ids, "id already exists in database"
                     assert x["id"] in metadata_ids, "id must be in metadata index"
                     assert x["id"] not in added_ids, "id must be unique"
                     # Add an entry that stores the original types of all entries
@@ -280,7 +288,7 @@ class LMDBDataset:
                         val=x,
                         txn=txn,
                         serialisation_format=self.serialisation_format,
-                        compress=True,
+                        compresslevel=compresslevel,
                         overwrite=overwrite,
                     )
                     added_ids.add(x["id"])
@@ -294,32 +302,55 @@ class LMDBDataset:
                     val=new_metadata,
                     txn=txn,
                     serialisation_format=self.serialisation_format,
-                    compress=True,
+                    compresslevel=self._compresslevel,
                     overwrite=True,
                 )
                 self._metadata = new_metadata
         logger.info(f"Successfully added {len(added_ids)}/{len(dataset)} values.")
         return self
 
-    # def update_value(self, x: dict) -> "LMDBDataset":
-    #     """Update a value in the database. Must occur in metadata."""
-    #     assert x["id"] in
+    def detect_integrity_problems(self) -> dict:
+        if self._env is None:
+            self._connect()
+        with self._env.begin() as txn:
+            keys = set([key.decode() for key in txn.cursor().iternext(values=False)])
+
+        for key in {"metadata", "serialisation_format", "compresslevel"}:
+            keys.remove(key)  # Raises KeyError if key is not in keys
+
+        integrity_problems = {
+            "missing_metadata": keys - set(self.metadata.index),
+            "missing_data": set(self.metadata.index) - keys,
+        }
+
+        n_missing_metadata = len(integrity_problems["missing_metadata"])
+        n_missing_data = len(integrity_problems["missing_data"])
+
+        if n_missing_metadata == 0 and n_missing_data == 0:
+            logger.info("No integrity problems detected.")
+            return {}
+        if n_missing_metadata > 0:
+            logger.warning(f"Found {n_missing_metadata} missing metadata entries.")
+        if n_missing_data > 0:
+            logger.warning(f"Found {n_missing_data} missing data entries.")
+        return integrity_problems
 
     # ==================== Creation functions ====================
     @staticmethod
     def create(
-        dataset: Sequence[dict],
         lmdb_path: pathlib.Path | str,
+        dataset: Sequence[dict],
         metadata: pd.DataFrame,
         serialisation_format: Literal["dill", "pkl", "msgpack"] = "msgpack",
         map_size: int = LMDB_MAP_SIZE,  # 10 TB
+        compresslevel: int = 6,
     ) -> "LMDBDataset":
         """
         Create a new LMDBDataset from a dataset and metadata and save it to disk.
 
         Args:
-            dataset (Sequence[dict]): data to add. Each dict must have an "id" key. Ids must be unique.
             lmdb_path (pathlib.Path | str): path under which to create the lmdb dataset.
+            dataset (Sequence[dict]): data to add. Each dict must have an "id" key. Ids must be unique.
             metadata (pd.DataFrame): metadata to add. Ids of the metadata must be unique and
                 match the ids of the dataset.
             serialisation_format (Literal["dill", "pkl", "msgpack"]): serialisation format. Default: "msgpack".
@@ -330,11 +361,9 @@ class LMDBDataset:
         """
         lmdb_path = pathlib.Path(lmdb_path).absolute()
         if lmdb_path.exists():
-            raise FileExistsError("lmdb_path exists.")
+            raise FileExistsError(f"lmdb_path {lmdb_path} exists already")
 
-        logger.info(
-            f"Creating lmdb dataset with {len(dataset)} examples at `{lmdb_path}`"
-        )
+        logger.info(f"Creating lmdb dataset with {len(dataset)} examples at `{lmdb_path}`")
         # Check that all ids are unique
         assert metadata.index.is_unique, "ids must be unique"
         # Create lmdb environment (creates database)
@@ -344,6 +373,10 @@ class LMDBDataset:
         with env.begin(write=True) as txn:
             added_ids = set()
             metadata_ids = set(metadata.index)
+            _lmdb_set(
+                key="serialisation_format", val=serialisation_format, txn=txn, compresslevel=0
+            )
+            _lmdb_set(key="compresslevel", val=compresslevel, txn=txn, compresslevel=0)
             # Add all datapoints to database
             for x in tqdm(dataset, total=len(dataset)):
                 try:
@@ -359,12 +392,11 @@ class LMDBDataset:
                         val=x,
                         txn=txn,
                         serialisation_format=serialisation_format,
-                        compress=True,
+                        compresslevel=compresslevel,
                     )
                     added_ids.add(x["id"])
                 except Exception as e:
                     logger.warning("Error adding item %s: %s" % (str(x["id"]), str(e)))
-            _lmdb_set(key="serialisation_format", val=serialisation_format, txn=txn)
             # Update metadata to only contain added ids
             metadata = metadata.loc[list(added_ids)]
             _lmdb_set(
@@ -372,19 +404,89 @@ class LMDBDataset:
                 val=metadata,
                 txn=txn,
                 serialisation_format=serialisation_format,
-                compress=True,
+                compresslevel=min(6, compresslevel),
             )
         logger.info(
             f"Dataset creation completed. {len(added_ids)}/{len(dataset)} successfully added."
         )
         return LMDBDataset(lmdb_path)
 
+    @staticmethod
+    def build_from_stream(
+        lmdb_path: pathlib.Path | str,
+        samples: Iterable["sample"],
+        get_id: Callable[["sample"], str],
+        get_data: Callable[["sample"], Tuple[dict, dict]],
+        buffer_size: int = 100,
+    ) -> "LMDBDataset":
+        """
+        Build a LMDBDataset from a stream of samples. This is useful for building a dataset
+        from a large number of samples that cannot be stored in memory. The samples are
+        processed one by one and added to the buffer. The buffer is saved to disk after
+        every `buffer_size` samples.
+
+        Args:
+            lmdb_path (pathlib.Path | str): path under which to create the lmdb dataset. Can be
+                an existing dataset, in which case the new samples are added to the existing
+                dataset.
+            samples (Iterable["sample"]): stream of samples to add to the dataset.
+            get_id (Callable[["sample"], str]): function that returns the id of a sample.
+            get_data (Callable[["sample"], Tuple[dict, dict]]): function that returns a tuple
+                of (datapoint, metadata) for a sample. Both, datapoint and metadata, must be
+                dicts with an "id" key that matches the id returned by `get_id` for the sample.
+            buffer_size (int): number of samples to add to the buffer before saving it to disk.
+                Default: 100.
+
+        Returns:
+            LMDBDataset: The dataset with the new samples added.
+        """
+        try:
+            db = LMDBDataset(lmdb_path)
+        except:
+            db = LMDBDataset.create(
+                lmdb_path=lmdb_path,
+                dataset=[],
+                metadata=pd.DataFrame(),
+                serialisation_format="msgpack",
+            )
+
+        dataset, metadata = [], []
+        for sample in tqdm(samples):
+            # Save buffer
+            if len(dataset) >= buffer_size:
+                metadata = pd.DataFrame(metadata)
+                metadata.set_index("id", inplace=True)
+                db.add_data(dataset=dataset, metadata=metadata, lock=True)
+                dataset = []
+                metadata = []
+
+            try:
+                id = get_id(sample)
+                if id in db:
+                    continue
+                # Add datapoint to buffer
+                datapoint, meta = get_data(sample)
+                dataset.append(datapoint)
+                metadata.append(meta)
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                logger.warning(f"{id} failed: {e}")
+
+        # Save last buffer
+        if len(dataset) > 0:
+            metadata = pd.DataFrame(metadata)
+            metadata.set_index("id", inplace=True)
+            db.add_data(dataset=dataset, metadata=metadata, lock=True)
+
+        return db
+
     def _cast_to_type(self, obj: Any, to_type: str) -> Any:
         """Helper function to avoid casting already casted objects from pickle serialisation"""
-        if self._serialisation_format == "pkl":
+        if self._serialisation_format in ("pkl", "dill"):
             return obj
         else:
-            return _cast_to_type(obj, to_type)
+            return _cast_to_type(obj, to_type=to_type)
 
 
 # =================== LMDB Helper functions ===================
@@ -393,7 +495,7 @@ def _lmdb_set(
     val: object,
     txn: lmdb.Transaction,
     serialisation_format: Literal["pkl", "dill", "msgpack"] | None = None,
-    compress: bool = False,
+    compresslevel: int = 0,
     overwrite: bool = False,
 ) -> bool:
     """Helper function to write objects to lmdb database"""
@@ -401,11 +503,10 @@ def _lmdb_set(
     # Encode
     val: bytes = serialise(val, serialisation_format)
     # Compress
-    if compress:
-        buf = io.BytesIO()
-        with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=6) as f:
-            f.write(val)
-        val = buf.getvalue()
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=compresslevel) as f:
+        f.write(val)
+    val = buf.getvalue()
     # Save
     result: bool = txn.put(key, val, overwrite=overwrite)
     # Validate that writing was successful
@@ -418,7 +519,6 @@ def _lmdb_get(
     key: str | bytes,
     txn: lmdb.Transaction,
     serialisation_format: Literal["pkl", "dill", "msgpack"] | None = None,
-    decompress: bool = False,
 ) -> object:
     """Helper function to retrieve items from a given lmdb database"""
     key: bytes = key if isinstance(key, bytes) else key.encode()
@@ -427,10 +527,9 @@ def _lmdb_get(
     if val is None:
         raise KeyError(f"Key {key.decode()} not found in database")
     # Decompress
-    if decompress:
-        buf = io.BytesIO(val)
-        with gzip.GzipFile(fileobj=buf, mode="rb") as f:
-            val = f.read()
+    buf = io.BytesIO(val)
+    with gzip.GzipFile(fileobj=buf, mode="rb") as f:
+        val = f.read()
     # Decode
     val: object = deserialise(val, serialisation_format)
     return val
@@ -440,6 +539,70 @@ def _lmdb_del(key: str | bytes, txn: lmdb.Transaction) -> bool:
     """Helper function to retrieve items from a given lmdb database"""
     key: bytes = key if isinstance(key, bytes) else key.encode()
     return txn.delete(key)
+
+
+# =================== Serialisation functions ===================
+def serialise(x: object, serialisation_format: Literal["pkl", "dill", "msgpack"]) -> bytes:
+    """
+    Serialises dataset `x` in format given by `serialisation_format` (pkl, dill, msgpack).
+    """
+    if serialisation_format == "pkl":
+        # pickle: Brittle across languages/python versions.
+        return pkl.dumps(x)
+    elif serialisation_format == "dill":
+        # dill: Memory efficient and more robust than pickle.
+        return dill.dumps(x)
+    elif serialisation_format == "msgpack":
+        # msgpack: A bit more memory efficient than json, a bit less supported.
+        serialised = msgpack.packb(x, default=_prepare_serialisation)
+    elif serialisation_format == None:
+        serialised = x if isinstance(x, bytes) else str(x).encode()
+    else:
+        raise RuntimeError("Invalid serialization format %s" % serialisation_format)
+    return serialised
+
+
+def deserialise(x: bytes, serialisation_format: Literal["pkl", "dill", "msgpack"] | None) -> object:
+    """
+    Deserialises dataset `x` assuming format given by `serialisation_format` (pkl, dill, msgpack).
+    """
+    if serialisation_format == "pkl":
+        return pkl.loads(x)
+    elif serialisation_format == "dill":
+        return dill.loads(x)
+    elif serialisation_format == "msgpack":
+        serialised = msgpack.unpackb(x, strict_map_key=False)
+    elif serialisation_format == None:
+        serialised = x.decode() if isinstance(x, bytes) else x
+    else:
+        raise RuntimeError("Invalid serialisation format %s" % serialisation_format)
+    return serialised
+
+
+def _prepare_serialisation(obj: object) -> object:
+    """Custom serealisation methods for objects that are not serialisable by default."""
+    if isinstance(obj, np.ndarray):
+        with io.BytesIO() as buf:
+            np.save(buf, obj)
+            return buf.getvalue()
+    elif isinstance(obj, pd.DataFrame):
+        return obj.to_dict(orient="split")
+    elif isinstance(obj, torch.Tensor):  # TODO: Switch to string comparison?
+        return _prepare_serialisation(obj.detach().cpu().numpy())
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif (
+        str(type(obj)) == "<class 'biotite.structure.AtomArray'>"
+    ):  # NOTE: We perform string comparison to avoid requiring biotite as a dependency
+        with io.BytesIO() as buf:
+            f = npz.NpzFile()
+            f.set_structure(obj)
+            f.write(buf)
+            return buf.getvalue()
+    else:
+        raise RuntimeError("Cannot serialise object of type %s" % type(obj))
 
 
 def _cast_to_type(obj: Any, to_type: str) -> Any:
